@@ -1,19 +1,21 @@
 /**
- * <confocal-pixel-tool> : interactive pixel size demo for point scanning confocals
+ * <confocal-pixel-tool> : interactive pixel size demo for point scanning confocals.
  *
  * Attributes (all optional):
- *   heading          Title shown in the purple bar
- *   objective-src    URL of your objective drawing (SVG/PNG). Hidden if omitted.
- *   image-src        URL of a sample image to show under the grid (JPG/PNG). Omit for plain black.
- *                    Also used to generate the acquired-image preview (hidden if omitted).
- *   fov-um           Width of the full 20x field of view at zoom 1, in µm (default 620)
- *   na               Objective numerical aperture (default 0.8)
- *   emission-nm      Emission wavelength used for the resolution estimate, in nm (default 520)
- *   nyquist-factor   Samples per resolvable distance that count as Nyquist (default 2.3)
- *   zoom-min         Minimum zoom (default 1)
- *   zoom-max         Maximum zoom (default 20)
- *   zoom-start       Starting zoom (default 2)
- *   grid-group       Pixels represented by each grid square, per side (default 32)
+ *   heading             Title shown in the purple bar
+ *   objective-src       URL of your objective drawing (SVG/PNG). Hidden if omitted.
+ *   image-src           URL of a sample image to show under the grid (JPG/PNG). Omit for plain black.
+ *                       Also used to generate the acquired-image preview (hidden if omitted).
+ *   fov-um              Width of the full 20x field of view at zoom 1, in µm (default 620)
+ *   na                  Objective numerical aperture (default 0.8)
+ *   emission-nm         Emission wavelength used for the resolution estimate, in nm (default 520)
+ *   nyquist-factor      Samples per resolvable distance that count as Nyquist (default 2.3)
+ *   brightness-exponent How strongly pixel size changes the acquired image brightness
+ *                       (default 0.5; 0 turns the effect off; 1 = proportional to pixel width)
+ *   zoom-min            Minimum zoom (default 1)
+ *   zoom-max            Maximum zoom (default 20)
+ *   zoom-start          Starting zoom (default 2)
+ *   grid-group          Pixels represented by each grid square, per side (default 32)
  *
  * Colors can be overridden from the host page with CSS variables, e.g.
  *   confocal-pixel-tool { --cpt-purple: #3a6ea5; }
@@ -27,6 +29,9 @@
   // across. Each doubling of image size still doubles the pixel count, but the
   // pixels are enlarged so students can see them. Set to 1 for no exaggeration.
   const PREVIEW_PIXEL_SCALE = 8;
+
+  // The acquired image never gets darker than this fraction of full brightness
+  const BRIGHTNESS_MIN = 0.12;
 
   const template = document.createElement('template');
   template.innerHTML = `
@@ -181,16 +186,62 @@
       .status.over  { color: #b8860b; }
       .status.under { color: #c0392b; }
 
-      /* Stack the right-hand column under the image on narrower screens */
+      /* ---------- Phones and small windows ----------
+         Keeps the two-column layout but shrinks the main image, so the
+         preview + objective fit beside it and the controls fit underneath.
+         --cv is the side length of the main image. It is limited by both the
+         screen width and the screen height, so everything fits without scrolling. */
       @media (max-width: 760px) {
-        .stage, .controls { grid-template-columns: minmax(0, 1fr); }
-        .controls { row-gap: 24px; }
-        .side { grid-column: 1; grid-row: 3; justify-self: center; align-self: auto; }
-        .objective { margin-top: 0; }
-        .controls-right { justify-self: center; }
-      }
-      @media (max-width: 640px) {
-        .controls-left { grid-template-columns: 1fr; }
+        :host { padding: 10px; --cv: min(58vw, 46vh); }
+        @supports (height: 1dvh) {
+          :host { --cv: min(58vw, 46dvh); }
+        }
+
+        h1 {
+          font-size: 0.95rem;
+          padding: 10px 14px;
+          margin-bottom: 10px;
+          border-radius: 24px;
+        }
+
+        .stage, .controls {
+          grid-template-columns: var(--cv) minmax(0, 1fr);
+          column-gap: 10px;
+        }
+        .stage { row-gap: 4px; }
+
+        .side { width: auto; }
+        .preview-wrap { width: calc(var(--cv) * 0.46); }
+        .preview-label { font-size: 0.58rem; margin-top: 3px; }
+        .preview-label .note { display: none; }
+        .objective {
+          width: auto;
+          height: calc(var(--cv) * 0.54 - 28px);
+          padding-top: 0;
+          flex: none;
+        }
+
+        .caption { grid-column: 1; font-size: 0.62rem; line-height: 1.3; min-height: 0; }
+
+        /* Row 1: image size | pixel size.   Row 2: scan area across the full width. */
+        .controls { margin-top: 8px; row-gap: 6px; }
+        .controls-left { display: contents; }
+        .ctl-size  { grid-column: 1;      grid-row: 1; }
+        .controls-right { grid-column: 2; grid-row: 1; width: auto; }
+        .ctl-zoom  { grid-column: 1 / -1; grid-row: 2; }
+
+        .heading { font-size: 0.9rem; margin-bottom: 5px; }
+        select {
+          padding: 8px 32px 8px 14px;
+          font-size: 0.9rem;
+          background-position: right 12px center;
+        }
+        input[type=range] { margin: 6px 0; }
+        input[type=range]::-webkit-slider-thumb { width: 22px; height: 22px; }
+        input[type=range]::-moz-range-thumb     { width: 22px; height: 22px; }
+        .sub { font-size: 0.7rem; line-height: 1.35; min-height: 0; }
+        .readout { padding: 7px 6px; font-size: 1.1rem; }
+        .status { font-size: 0.68rem; margin-top: 4px; }
       }
     </style>
 
@@ -210,7 +261,7 @@
 
     <div class="controls">
       <div class="controls-left">
-        <div>
+        <div class="ctl-size">
           <label class="heading" for="size">image size</label>
           <select id="size">
             <option value="256">256x256</option>
@@ -220,7 +271,7 @@
           </select>
         </div>
 
-        <div>
+        <div class="ctl-zoom">
           <label class="heading" for="zoom">scan area</label>
           <input type="range" id="zoom" step="0.1">
           <div class="sub" id="zoomInfo"></div>
@@ -238,7 +289,7 @@
   class ConfocalPixelTool extends HTMLElement {
     static get observedAttributes() {
       return ['heading', 'objective-src', 'image-src', 'fov-um', 'na', 'emission-nm',
-              'nyquist-factor', 'zoom-min', 'zoom-max', 'grid-group'];
+              'nyquist-factor', 'brightness-exponent', 'zoom-min', 'zoom-max', 'grid-group'];
     }
 
     constructor() {
@@ -270,6 +321,11 @@
     get emissionNm()     { return this._num('emission-nm', 520); }
     get gridGroup()      { return this._num('grid-group', 32); }
     get nyquistFactor()  { return this._num('nyquist-factor', 2.3); }
+    get brightnessExp()  {
+      // 0 is a valid value (turns the effect off), so it can't use _num()
+      const v = parseFloat(this.getAttribute('brightness-exponent'));
+      return Number.isFinite(v) && v >= 0 ? v : 0.5;
+    }
 
     /* ---------- lifecycle ---------- */
     connectedCallback() {
@@ -441,7 +497,21 @@
       return a;   // m × m canvas
     }
 
-    /* Acquired-image preview: pixelation follows the image size and scan area. */
+    /* Relative brightness of the acquired image (0.12 to 1).
+       Bigger pixels collect signal from more sample area, so they look brighter.
+       Pixel size is compared with the largest pixel the tool can produce
+       (smallest image size at minimum zoom), then compressed with an exponent
+       because the real range of pixel areas is far too large to display. */
+    _brightness(pixelUm) {
+      const exp = this.brightnessExp;
+      if (exp === 0) return 1;
+      const sizes  = [...this.el.size.options].map((o) => parseInt(o.value, 10));
+      const maxPix = this.fovUm / this._num('zoom-min', 1) / Math.min(...sizes);
+      const rel = (pixelUm / maxPix) ** exp;
+      return Math.min(1, Math.max(BRIGHTNESS_MIN, rel));
+    }
+
+    /* Acquired-image preview: pixelation and brightness follow the image size and scan area. */
     _drawPreview() {
       const { preview, previewWrap, previewLabel, size, zoom: zoomEl } = this.el;
       const img = this._img;
@@ -479,9 +549,21 @@
       pctx.imageSmoothingEnabled = m > px;
       pctx.drawImage(acq, 0, 0, m, m, 0, 0, px, px);
 
-      previewLabel.innerHTML = PREVIEW_PIXEL_SCALE > 1
-        ? `acquired image <br>(pixels enlarged ${PREVIEW_PIXEL_SCALE}× for display)`
-        : `acquired image`;
+      // Brightness: darken with a translucent black layer (works in every browser,
+      // unlike canvas filters, which Safari doesn't support everywhere)
+      const pixelUm = this.fovUm / zoom / n;
+      const bright  = this._brightness(pixelUm);
+      if (bright < 1) {
+        pctx.fillStyle = `rgba(0, 0, 0, ${1 - bright})`;
+        pctx.fillRect(0, 0, px, px);
+      }
+
+      // The small note is hidden on phones (see .note in the CSS)
+      const notes = [];
+      if (PREVIEW_PIXEL_SCALE > 1) notes.push(`(pixels enlarged ${PREVIEW_PIXEL_SCALE}× for display)`);
+      previewLabel.innerHTML =
+        `acquired image` +
+        (notes.length ? `<span class="note">${notes.map((t) => '<br>' + t).join('')}</span>` : '');
     }
 
     /* ---------- readouts ---------- */
@@ -503,7 +585,7 @@
 
       pixelSize.textContent = this._fmtLength(pixelUm);
 
-      // Nyquist is defined here as nyquistFactor (2.3) pixels per airy radius.
+      // Nyquist is defined here as nyquistFactor (default 2.3) pixels per airy radius.
       const resolutionNm = (0.61 * this.emissionNm) / this.na;   // Rayleigh criterion
       const ratio  = resolutionNm / (pixelUm * 1000);
       const target = this.nyquistFactor;
@@ -516,7 +598,7 @@
       } else {
         label = 'Nyquist sampling';  cls = 'ok';
       }
-      status.textContent = `${label} (${ratio.toFixed(1)}×)`;
+      status.textContent = `${label} (${ratio.toFixed(1)}× sampling)`;
       status.className = `status ${cls}`;
 
       this._draw();
